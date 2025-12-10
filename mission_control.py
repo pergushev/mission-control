@@ -371,3 +371,59 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
 
     print(f"✓ Создана расширенная миссия из {len(mission)} точек")
     return mission
+
+
+def verify_mission(original: List[MissionItem], downloaded: List[MissionItem]) -> bool:
+    """
+    Проверка соответствия загруженной и прочитанной миссий
+
+    Args:
+        original: исходная миссия
+        downloaded: прочитанная с борта миссия
+
+    Returns:
+        True если миссии идентичны
+    """
+    print("\n=== Верификация миссии ===")
+
+    if len(original) != len(downloaded):
+        print(f"✗ Количество точек не совпадает: {len(original)} != {len(downloaded)}")
+        return False
+
+    all_match = True
+
+    for i, (orig, down) in enumerate(zip(original, downloaded)):
+        match = True
+        issues = []
+
+        if orig.seq != down.seq:
+            issues.append(f"seq: {orig.seq} != {down.seq}")
+            match = False
+        if orig.command != down.command:
+            issues.append(f"command: {orig.command} != {down.command}")
+            match = False
+        if orig.frame != down.frame:
+            issues.append(f"frame: {orig.frame} != {down.frame}")
+            match = False
+        if abs(orig.z - down.z) > 0.1:  # Допуск 10см
+            issues.append(f"z: {orig.z} != {down.z}")
+            match = False
+        if abs(orig.x - down.x) > 10:  # Допуск в координатах
+            issues.append(f"x: {orig.x} != {down.x}")
+            match = False
+        if abs(orig.y - down.y) > 10:
+            issues.append(f"y: {orig.y} != {down.y}")
+            match = False
+
+        if match:
+            print(f"✓ Точка {i}: OK (команда={orig.command}, z={orig.z}м)")
+        else:
+            print(f"✗ Точка {i}: несовпадение - {', '.join(issues)}")
+            all_match = False
+
+    if all_match:
+        print("\n✓✓✓ Миссия полностью совпадает ✓✓✓")
+    else:
+        print("\n✗✗✗ Обнаружены расхождения ✗✗✗")
+
+    return all_match
