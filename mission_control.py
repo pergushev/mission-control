@@ -172,3 +172,91 @@ def upload_mission(master: mavutil.mavlink_connection, items: List[MissionItem])
     except Exception as e:
         print(f"✗ Исключение при загрузке миссии: {e}")
         return False
+
+
+def download_mission(master: mavutil.mavlink_connection) -> List[MissionItem]:
+    """
+    Чтение миссии по протоколу Mission Protocol:
+    1) MISSION_REQUEST_LIST
+    2) получение MISSION_COUNT
+    3) цикл: MISSION_REQUEST_INT -> MISSION_ITEM_INT
+
+    Args:
+        master: MAVLink соединение
+
+    Returns:
+        Список точек миссии (пустой список при ошибке)
+    """
+    print("Запрос списка миссии...")
+
+    try:
+        master.mav.mission_request_list_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_MISSION_TYPE_MISSION
+        )
+
+        msg = master.recv_match(type=['MISSION_COUNT'], blocking=True, timeout=5)
+        if msg is None:
+            print("Таймаут ожидания MISSION_COUNT")
+            return []
+
+        count = msg.count
+        print(f"Получено MISSION_COUNT: {count} точек")
+
+        if count == 0:
+            print("Миссия пуста")
+            return []
+
+        items: List[MissionItem] = []
+
+        for seq in range(count):
+            master.mav.mission_request_int_send(
+                master.target_system,
+                master.target_component,
+                seq,
+                mavutil.mavlink.MAV_MISSION_TYPE_MISSION
+            )
+
+            item_msg = master.recv_match(
+                type=['MISSION_ITEM_INT', 'MISSION_ITEM'],
+                blocking=True,
+                timeout=5
+            )
+
+            if item_msg is None:
+                print(f"Таймаут ожидания точки {seq}")
+                continue
+
+            items.append(
+                MissionItem(
+                    seq=item_msg.seq,
+                    frame=item_msg.frame,
+                    command=item_msg.command,
+                    current=item_msg.current,
+                    autocontinue=item_msg.autocontinue,
+                    param1=item_msg.param1,
+                    param2=item_msg.param2,
+                    param3=item_msg.param3,
+                    param4=item_msg.param4,
+                    x=item_msg.x,
+                    y=item_msg.y,
+                    z=item_msg.z,
+                )
+            )
+            print(f"Получена точка {seq}: команда={item_msg.command}, z={item_msg.z}м")
+
+        # Отправляем ACK что приняли миссию
+        master.mav.mission_ack_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_MISSION_ACCEPTED,
+            mavutil.mavlink.MAV_MISSION_TYPE_MISSION
+        )
+
+        print(f"✓ Миссия успешно прочитана: {len(items)} точек")
+        return items
+
+    except Exception as e:
+        print(f"✗ Исключение при чтении миссии: {e}")
+        return []
