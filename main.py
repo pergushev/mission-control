@@ -271,3 +271,15 @@ def main():
     if not downloaded:
         print("\n✗ Не удалось прочитать миссию")
         sys.exit(1)
+
+        print(f"✓ Прочитано {len(downloaded)} точек миссии")
+
+        # Шаг 7: Верификация
+        print("\n" + "=" * 70)
+        print("ШАГ 7: Верификация миссии")
+        print("=" * 70)
+
+        if verify_mission(mission, downloaded):
+            print("\n✓✓✓ УСПЕХ! Миссия полностью совпадает ✓✓✓")
+        else:
+            print("\n⚠⚠⚠ ВНИМАНИЕ! Обнаружены расхождения ⚠⚠⚠")
