@@ -283,3 +283,28 @@ def main():
             print("\n✓✓✓ УСПЕХ! Миссия полностью совпадает ✓✓✓")
         else:
             print("\n⚠⚠⚠ ВНИМАНИЕ! Обнаружены расхождения ⚠⚠⚠")
+
+    # Завершение
+    print("\n" + "=" * 70)
+    print("РАБОТА ЗАВЕРШЕНА")
+    print("=" * 70)
+    print("\nМиссия готова к выполнению!")
+    print("\nДля запуска миссии вручную:")
+    print("  1. В Mission Planner или QGroundControl")
+    print("  2. ARM дрон")
+    print("  3. Переведите в режим AUTO")
+    print("  4. Дрон выполнит загруженную миссию")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n✗ Прервано пользователем (Ctrl+C)")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n\n✗ Неожиданная ошибка: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
