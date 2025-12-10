@@ -36,3 +36,37 @@ class MissionItem:
     x: int  # lat * 1e7
     y: int  # lon * 1e7
     z: float  # alt (м)
+
+
+def clear_mission(master: mavutil.mavlink_connection) -> bool:
+    """
+    Очистка миссии командой MISSION_CLEAR_ALL
+
+    Args:
+        master: MAVLink соединение
+
+    Returns:
+        True если команда отправлена успешно
+    """
+    try:
+        master.mav.mission_clear_all_send(
+            master.target_system,
+            master.target_component
+        )
+        print("Команда MISSION_CLEAR_ALL отправлена")
+
+        # Ожидаем подтверждение
+        msg = master.recv_match(type=['MISSION_ACK'], blocking=True, timeout=5)
+        if msg and msg.type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
+            print("Миссия успешно очищена")
+            return True
+        elif msg:
+            print(f"Ошибка очистки миссии: код {msg.type}")
+            return False
+        else:
+            print("Таймаут ожидания MISSION_ACK")
+            return False
+
+    except Exception as e:
+        print(f"Ошибка при очистке миссии: {e}")
+        return False
