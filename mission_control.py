@@ -260,3 +260,114 @@ def download_mission(master: mavutil.mavlink_connection) -> List[MissionItem]:
     except Exception as e:
         print(f"✗ Исключение при чтении миссии: {e}")
         return []
+
+
+def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float = 20.0) -> List[MissionItem]:
+    """
+    Создание расширенной тестовой миссии: взлёт -> 3 точки -> посадка
+
+    Args:
+        master: MAVLink соединение для получения текущих координат
+        target_alt_m: целевая высота полёта в метрах
+
+    Returns:
+        Список точек миссии из 5 элементов
+    """
+    # Получаем текущую позицию
+    print("Ожидание GPS позиции...")
+    gps_msg = master.recv_match(type=['GLOBAL_POSITION_INT'], blocking=True, timeout=10)
+
+    if gps_msg is None:
+        print("Предупреждение: не получены GPS данные, используем координаты по умолчанию")
+        home_lat = int(55.7558 * 1e7)  # Москва
+        home_lon = int(37.6173 * 1e7)
+    else:
+        home_lat = gps_msg.lat
+        home_lon = gps_msg.lon
+        print(f"Текущая позиция: lat={home_lat / 1e7:.7f}, lon={home_lon / 1e7:.7f}")
+
+    # Создаём миссию
+    mission = []
+
+    # Точка 0: Взлёт
+    mission.append(MissionItem(
+        seq=0,
+        frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        command=mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+        current=1,  # Первая точка - текущая
+        autocontinue=1,
+        param1=0,  # Pitch
+        param2=0,
+        param3=0,
+        param4=0,  # Yaw
+        x=home_lat,
+        y=home_lon,
+        z=target_alt_m  # Высота взлёта
+    ))
+
+    # Точка 1: Путевая точка на север (20м по широте ≈ 0.0002°)
+    mission.append(MissionItem(
+        seq=1,
+        frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        current=0,
+        autocontinue=1,
+        param1=5.0,  # Задержка 5 сек
+        param2=0,
+        param3=0,
+        param4=0,
+        x=home_lat + int(0.0002 * 1e7),
+        y=home_lon,
+        z=target_alt_m
+    ))
+
+    # Точка 2: Путевая точка на восток
+    mission.append(MissionItem(
+        seq=2,
+        frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        current=0,
+        autocontinue=1,
+        param1=5.0,
+        param2=0,
+        param3=0,
+        param4=0,
+        x=home_lat + int(0.0002 * 1e7),
+        y=home_lon + int(0.0002 * 1e7),
+        z=target_alt_m
+    ))
+
+    # Точка 3: Путевая точка возврат на юг
+    mission.append(MissionItem(
+        seq=3,
+        frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        current=0,
+        autocontinue=1,
+        param1=5.0,
+        param2=0,
+        param3=0,
+        param4=0,
+        x=home_lat,
+        y=home_lon + int(0.0002 * 1e7),
+        z=target_alt_m
+    ))
+
+    # Точка 4: Посадка в точке старта
+    mission.append(MissionItem(
+        seq=4,
+        frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        command=mavutil.mavlink.MAV_CMD_NAV_LAND,
+        current=0,
+        autocontinue=1,
+        param1=0,
+        param2=0,
+        param3=0,
+        param4=0,
+        x=home_lat,
+        y=home_lon,
+        z=0.0
+    ))
+
+    print(f"✓ Создана расширенная миссия из {len(mission)} точек")
+    return mission
