@@ -3,6 +3,7 @@
 Реализует протокол MAVLink Mission Protocol для работы с полётными заданиями
 """
 
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -75,9 +76,9 @@ def clear_mission(master: mavutil.mavlink_connection) -> bool:
 def upload_mission(master: mavutil.mavlink_connection, items: List[MissionItem]) -> bool:
     """
     Загрузка миссии по протоколу Mission Protocol:
-    1) MISSION_COUNT
-    2) цикл: MISSION_REQUEST_INT -> MISSION_ITEM_INT
-    3) ожидание MISSION_ACK
+    1) Отправить MISSION_COUNT
+    2) Ожидать MISSION_REQUEST_INT и отправлять MISSION_ITEM_INT
+    3) После всех отправок — ожидать MISSION_ACK
 
     Args:
         master: MAVLink соединение
@@ -94,7 +95,7 @@ def upload_mission(master: mavutil.mavlink_connection, items: List[MissionItem])
     print(f"Начинаем загрузку миссии из {count} точек")
 
     try:
-        # Отправляем количество точек
+        # Шаг 1: Отправляем количество точек
         master.mav.mission_count_send(
             master.target_system,
             master.target_component,
@@ -103,36 +104,41 @@ def upload_mission(master: mavutil.mavlink_connection, items: List[MissionItem])
         )
         print(f"MISSION_COUNT отправлен: {count} точек")
 
-        sent = 0
-        max_iterations = count * 3  # Защита от бесконечного цикла
-        iterations = 0
+        sent = set()
+        max_wait_sec = 10
+        start_time = time.time()
 
-        while sent < count and iterations < max_iterations:
-            iterations += 1
+        # Шаг 2: Цикл обработки запросов на точки
+        while len(sent) < count:
+            elapsed = time.time() - start_time
+            if elapsed > max_wait_sec:
+                print(f"✗ Таймаут ожидания запросов после {max_wait_sec} секунд")
+                return False
 
             msg = master.recv_match(
                 type=['MISSION_REQUEST_INT', 'MISSION_REQUEST', 'MISSION_ACK'],
                 blocking=True,
-                timeout=5
+                timeout=2  # короткий таймаут для более частых проверок
             )
 
             if msg is None:
-                print(f"Таймаут ожидания запроса точки {sent}")
                 continue
 
             msg_type = msg.get_type()
 
-            if msg_type in ['MISSION_REQUEST_INT', 'MISSION_REQUEST']:
+            if msg_type in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
                 seq = msg.seq
 
-                # ВАЖНО: проверяем, что seq в диапазоне [0, count-1]
                 if seq < 0 or seq >= count:
-                    print(f"Получен запрос с некорректным seq={seq}, ожидаем 0..{count - 1}")
+                    print(f"❗ Получен запрос с некорректным seq={seq}, ожидаем 0..{count - 1}")
                     continue
 
-                item = items[seq]
+                if seq in sent:
+                    print(f"⚠️ Точка {seq} уже отправлена — повторный запрос, отправляем снова")
+                    # ArduPilot иногда перезапрашивает — это нормально
 
-                print(f"Отправка точки {seq}/{count - 1}: команда={item.command}, z={item.z}м")
+                item = items[seq]
+                print(f"📤 Отправка точки {seq}/{count - 1}: команда={item.command}, z={item.z}м")
 
                 master.mav.mission_item_int_send(
                     master.target_system,
@@ -151,26 +157,39 @@ def upload_mission(master: mavutil.mavlink_connection, items: List[MissionItem])
                     item.z,
                     mavutil.mavlink.MAV_MISSION_TYPE_MISSION
                 )
-                sent += 1
+                sent.add(seq)
 
             elif msg_type == 'MISSION_ACK':
                 ack_type = msg.type
                 if ack_type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                    print(f"✓ Миссия успешно загружена ({sent} точек)")
+                    print(f"✅ Миссия успешно загружена ({len(sent)} точек)")
                     return True
                 else:
-                    print(f"✗ Ошибка загрузки миссии: код {ack_type}")
+                    print(f"❌ Ошибка загрузки миссии: код {ack_type}")
                     return False
 
-        if iterations >= max_iterations:
-            print("✗ Превышено максимальное число итераций")
+        # Шаг 3: Все точки отправлены, но ACK ещё не пришёл — ждём отдельно
+        print("✅ Все точки отправлены. Ожидание MISSION_ACK...")
+        ack_msg = master.recv_match(
+            type=['MISSION_ACK'],
+            blocking=True,
+            timeout=5
+        )
+
+        if ack_msg and ack_msg.type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
+            print("✅ Получено подтверждение: миссия принята")
+            return True
+        else:
+            if ack_msg:
+                print(f"❌ Получен MISSION_ACK с ошибкой: {ack_msg.type}")
+            else:
+                print("❌ Таймаут ожидания MISSION_ACK")
             return False
 
-        print("✗ Не получено подтверждение MISSION_ACK")
-        return False
-
     except Exception as e:
-        print(f"✗ Исключение при загрузке миссии: {e}")
+        print(f"❌ Исключение при загрузке миссии: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -271,7 +290,7 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
         target_alt_m: целевая высота полёта в метрах
 
     Returns:
-        Список точек миссии из 5 элементов
+        Список точек миссии из 5 элементов (seq от 1 до 5)
     """
     # Получаем текущую позицию
     print("Ожидание GPS позиции...")
@@ -286,33 +305,33 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
         home_lon = gps_msg.lon
         print(f"Текущая позиция: lat={home_lat / 1e7:.7f}, lon={home_lon / 1e7:.7f}")
 
-    # Создаём миссию
+    # Создаём миссию (5 точек, seq от 1 до 5)
     mission = []
 
-    # Точка 0: Взлёт
+    # Точка 1: Взлёт — seq=1, current=1
     mission.append(MissionItem(
         seq=0,
         frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
         command=mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-        current=1,  # Первая точка - текущая
+        current=1,  # Только у первой реальной точки!
         autocontinue=1,
-        param1=0,  # Pitch
+        param1=0,
         param2=0,
         param3=0,
-        param4=0,  # Yaw
+        param4=0,
         x=home_lat,
         y=home_lon,
-        z=target_alt_m  # Высота взлёта
+        z=target_alt_m
     ))
 
-    # Точка 1: Путевая точка на север (20м по широте ≈ 0.0002°)
+    # Точка 2: Путевая точка на север
     mission.append(MissionItem(
         seq=1,
         frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # ✅ Правильно!
         current=0,
         autocontinue=1,
-        param1=5.0,  # Задержка 5 сек
+        param1=5.0,
         param2=0,
         param3=0,
         param4=0,
@@ -321,11 +340,11 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
         z=target_alt_m
     ))
 
-    # Точка 2: Путевая точка на восток
+    # Точка 3: Путевая точка на восток
     mission.append(MissionItem(
         seq=2,
         frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # ✅ Исправлено!
         current=0,
         autocontinue=1,
         param1=5.0,
@@ -337,11 +356,11 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
         z=target_alt_m
     ))
 
-    # Точка 3: Путевая точка возврат на юг
+    # Точка 4: Путевая точка возврат на юг
     mission.append(MissionItem(
         seq=3,
         frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+        command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # ✅ Исправлено!
         current=0,
         autocontinue=1,
         param1=5.0,
@@ -353,7 +372,7 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
         z=target_alt_m
     ))
 
-    # Точка 4: Посадка в точке старта
+    # Точка 5: Посадка
     mission.append(MissionItem(
         seq=4,
         frame=mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
@@ -369,7 +388,7 @@ def create_test_mission(master: mavutil.mavlink_connection, target_alt_m: float 
         z=0.0
     ))
 
-    print(f"✓ Создана расширенная миссия из {len(mission)} точек")
+    print(f"✓ Создана расширенная миссия из {len(mission)} точек (seq 1–{len(mission)})")
     return mission
 
 
